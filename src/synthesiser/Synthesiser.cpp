@@ -112,6 +112,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <tuple>
 #include <type_traits>
@@ -2828,6 +2829,81 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
         constructor.setNextInitializer("profiling_fname", "std::move(pf)");
     }
 
+    // generate struct for derivation tree node
+    GenDatastructure& node =
+            db.getDatastructure("DerivationTreeNode", fs::path("DerivationTreeNode"), std::nullopt);
+    node.addInclude("<map>");
+    std::ostream& decl = node.decl();
+    std::ostream& def = node.def();
+    // node struct definition
+    decl << "struct DerivationTreeNode {\n";
+    decl << "std::string relation_name;\n";
+    decl << "std::vector<souffle::RamDomain> attributes;\n";
+
+    decl << "bool operator<(const DerivationTreeNode &rhs) const;\n";
+    def << "bool DerivationTreeNode::operator<(const DerivationTreeNode &rhs) const {\n";
+    def << "if (relation_name != rhs.relation_name) {\n";
+    def << "return relation_name < rhs.relation_name;\n";
+    def << "}\n";
+    def << "for (auto itl = attributes.begin(), itr = rhs.attributes.begin();\n";
+    def << "itl != attributes.end() && itr != rhs.attributes.end(); ++itl, ++itr) {\n";
+    def << "if ((*itl) != (*itr)) {\n";
+    def << "return (*itl) < (*itr);\n";
+    def << "}\n";
+    def << "}\n";
+    def << "return attributes.size() < rhs.attributes.size();\n";
+    def << "}\n";
+
+    decl << "template <typename T, size_t N> DerivationTreeNode(const std::string &relation, const "
+            "std::array<T, N> &attrs);\n";
+    def << "template <typename T, size_t N> DerivationTreeNode::DerivationTreeNode(const std::string "
+           "&relation,\n";
+    def << "const std::array<T, N> &attrs) : relation_name(relation) {\n";
+    def << "std::vector<souffle::RamDomain> v{};\n";
+    def << "for (const auto &attr : attrs) {\n";
+    def << "v.push_back(souffle::ramBitCast(attr));\n";
+    def << "}\n";
+    def << "this->attributes = v;\n";
+    def << "}\n";
+
+    decl << "void print() const;\n";
+    def << "void DerivationTreeNode::print() const {\n";
+    def << "std::cout << relation_name << \"(\";\n";
+    def << "for (auto it = attributes.begin(); it != attributes.end(); ++it) {\n";
+    def << "std::cout << *it << ((it + 1 != attributes.end()) ? \", \" : \")\");\n";
+    def << "}\n";
+    def << "}\n";
+
+    // end of node struct
+    decl << "};\n";
+
+    // generate class for derivation tree
+    GenClass& gen = db.getClass("DerivationTree", fs::path(convertStratumIdent("DerivationTree")));
+    mainClass.addDependency(gen);
+    gen.addField("std::map<DerivationTreeNode, std::vector<std::vector<DerivationTreeNode>>>", "tree", Visibility::Private);
+    // generate node structure
+    GenFunction& add = gen.addFunction("add", Visibility::Public);
+    add.setRetType("void");
+    add.setNextArg("const DerivationTreeNode&", "parent");
+    add.setNextArg("const std::vector<DerivationTreeNode>&", "children");
+    add.body() << "tree[parent].push_back(children);\n";
+    GenFunction& print_derivation_tree = gen.addFunction("print", Visibility::Public);
+    print_derivation_tree.setRetType("void");
+    print_derivation_tree.body() << R"_(
+for (auto x : tree) {
+    for (auto nodes : x.second) {
+    x.first.print();
+    std::cout << " -> ";
+    for (auto it = nodes.begin(); it != nodes.end(); ++it) {
+        it->print();
+        std::cout << ((it + 1 != nodes.end()) ? ", " : "\n");
+    }
+    }
+}
+    )_";
+
+    mainClass.addField("DerivationTree", "derivation_tree", Visibility::Private);
+
     // issue symbol table with string constants
     visit(prog, [&](const StringConstant& sc) { convertSymbol2Idx(sc.getConstant()); });
     std::stringstream st;
@@ -3032,6 +3108,7 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
         runAll.body() << "std::thread profiler([]() { profile::Tui().runProf(); });\n";
     }
     runAll.body() << "runFunction(inputDirectoryArg, outputDirectoryArg, performIOArg, pruneImdtRelsArg);\n";
+    runAll.body() << "derivation_tree.print();\n";
     if (glb.config().has("live-profile")) {
         runAll.body() << "if (profiler.joinable()) { profiler.join(); }\n";
     }
