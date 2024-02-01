@@ -20,6 +20,7 @@
 #include "GenDb.h"
 #include "Global.h"
 #include "RelationTag.h"
+#include "ast2ram/utility/Utils.h"
 #include "config.h"
 #include "ram/AbstractParallel.h"
 #include "ram/Aggregate.h"
@@ -610,7 +611,7 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             PRINT_BEGIN_COMMENT(out);
             out << "{\n";
             out << " std::vector<RamDomain> args, ret;\n";
-            out << synthesiser.convertStratumIdent(call.getName()) << ".run(args, ret);\n";
+            out << synthesiser.convertStratumIdent(call.getName()) << ".run(args, ret, derivation_tree);\n";
             out << "}\n";
             PRINT_END_COMMENT(out);
         }
@@ -658,6 +659,8 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             out << "signalHandler->setMsg(R\"_(";
             out << dbg.getMessage();
             out << ")_\");\n";
+
+            out << "std::vector<DerivationTreeNode> node{};\n";
 
             // insert statements of the rule
             dispatch(dbg.getStatement(), out);
@@ -731,7 +734,13 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             out << "for(const auto& env" << id << " : "
                 << "*" << relName << ") {\n";
 
+            out << "node.push_back(DerivationTreeNode(\""
+                << stripPrefix("@new_", stripPrefix("@delta_", stripPrefix("@info_", rel->getName())))
+                << "\", env" << id << "));\n";
+
             visit_(type_identity<TupleOperation>(), scan, out);
+
+            out << "node.pop_back();\n";
 
             out << "}\n";
 
@@ -755,7 +764,13 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
 
             out << ") {\n";
 
+            out << "node.push_back(DerivationTreeNode(\""
+                << stripPrefix("@new_", stripPrefix("@delta_", stripPrefix("@info_", rel->getName())))
+                << "\", env" << identifier << "));\n";
+
             visit_(type_identity<TupleOperation>(), ifexists, out);
+
+            out << "node.pop_back();\n";
 
             out << "break;\n";
             out << "}\n";
@@ -830,7 +845,13 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
                 << rangeBounds.second.str() << "," << ctxName << ");\n";
             out << "for(const auto& env" << identifier << " : range) {\n";
 
+            out << "node.push_back(DerivationTreeNode(\""
+                << stripPrefix("@new_", stripPrefix("@delta_", stripPrefix("@info_", rel->getName())))
+                << "\", env" << identifier << "));\n";
+
             visit_(type_identity<TupleOperation>(), iscan, out);
+
+            out << "node.pop_back();\n";
 
             out << "}\n";
             PRINT_END_COMMENT(out);
@@ -1028,7 +1049,13 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
 
             out << ") {\n";
 
+            out << "node.push_back(DerivationTreeNode(\""
+                << stripPrefix("@new_", stripPrefix("@delta_", stripPrefix("@info_", rel->getName())))
+                << "\", env" << identifier << "));\n";
+
             visit_(type_identity<TupleOperation>(), iifexists, out);
+
+            out << "node.pop_back();\n";
 
             out << "break;\n";
             out << "}\n";
@@ -1756,6 +1783,15 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             out << relName << "->"
                 << "insert(tuple," << ctxName << ");\n";
 
+            if (isPrefix("@new_", rel->getName())) {
+                // add derivation tree edge
+                out << "derivation_tree.add(DerivationTreeNode(\"" << stripPrefix("@new_", rel->getName())
+                    << "\", tuple), node);\n";
+            } else if (!isPrefix("@delta_", rel->getName()) && !isPrefix("@info_", rel->getName())) {
+                out << "derivation_tree.add(DerivationTreeNode(\"" << rel->getName()
+                    << "\", tuple), node);\n";
+            }
+
             // end of conseq body.
             out << "}\n";
 
@@ -1776,6 +1812,15 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             // insert tuple
             out << relName << "->"
                 << "insert(tuple," << ctxName << ");\n";
+
+            // add derivation tree edge
+            if (isPrefix("@new_", rel->getName())) {
+                out << "derivation_tree.add(DerivationTreeNode(\"" << stripPrefix("@new_", rel->getName())
+                    << "\", tuple), node);\n";
+            } else if (!isPrefix("@delta_", rel->getName()) && !isPrefix("@info_", rel->getName())) {
+                out << "derivation_tree.add(DerivationTreeNode(\"" << rel->getName()
+                    << "\", tuple), node);\n";
+            }
 
             PRINT_END_COMMENT(out);
         }
@@ -2657,6 +2702,82 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
 
     std::map<std::string, std::string> relationTypes;
 
+    // generate struct for derivation tree node
+    GenDatastructure& node =
+            db.getDatastructure("DerivationTreeNode", fs::path("DerivationTreeNode"), std::nullopt);
+    node.addInclude("<map>");
+    std::ostream& decl = node.decl();
+    std::ostream& def = node.def();
+    // node struct definition
+    decl << "struct DerivationTreeNode {\n";
+    decl << "std::string relation_name;\n";
+    decl << "std::vector<souffle::RamDomain> attributes;\n";
+
+    decl << "bool operator<(const DerivationTreeNode &rhs) const;\n";
+    def << "bool DerivationTreeNode::operator<(const DerivationTreeNode &rhs) const {\n";
+    def << "if (relation_name != rhs.relation_name) {\n";
+    def << "return relation_name < rhs.relation_name;\n";
+    def << "}\n";
+    def << "for (auto itl = attributes.begin(), itr = rhs.attributes.begin();\n";
+    def << "itl != attributes.end() && itr != rhs.attributes.end(); ++itl, ++itr) {\n";
+    def << "if ((*itl) != (*itr)) {\n";
+    def << "return (*itl) < (*itr);\n";
+    def << "}\n";
+    def << "}\n";
+    def << "return attributes.size() < rhs.attributes.size();\n";
+    def << "}\n";
+
+    decl << "template <typename T, size_t N> DerivationTreeNode(const std::string &relation, const "
+            "std::array<T, N> &attrs);\n";
+    def << "template <typename T, size_t N> DerivationTreeNode::DerivationTreeNode(const std::string "
+           "&relation,\n";
+    def << "const std::array<T, N> &attrs) : relation_name(relation) {\n";
+    def << "std::vector<souffle::RamDomain> v{};\n";
+    def << "for (const auto &attr : attrs) {\n";
+    def << "v.push_back(souffle::ramBitCast(attr));\n";
+    def << "}\n";
+    def << "this->attributes = v;\n";
+    def << "}\n";
+
+    decl << "void print() const;\n";
+    def << "void DerivationTreeNode::print() const {\n";
+    def << "std::cout << relation_name << \"(\";\n";
+    def << "for (auto it = attributes.begin(); it != attributes.end(); ++it) {\n";
+    def << "std::cout << *it << ((it + 1 != attributes.end()) ? \", \" : \")\");\n";
+    def << "}\n";
+    def << "}\n";
+
+    // end of node struct
+    decl << "};\n";
+
+    // generate class for derivation tree
+    GenClass& gen = db.getClass("DerivationTree", fs::path(convertStratumIdent("DerivationTree")));
+    mainClass.addDependency(gen);
+    gen.addField("std::map<DerivationTreeNode, std::vector<std::vector<DerivationTreeNode>>>", "tree",
+            Visibility::Private);
+    // generate node structure
+    GenFunction& add = gen.addFunction("add", Visibility::Public);
+    add.setRetType("void");
+    add.setNextArg("const DerivationTreeNode&", "parent");
+    add.setNextArg("const std::vector<DerivationTreeNode>&", "children");
+    add.body() << "tree[parent].push_back(children);\n";
+    GenFunction& print_derivation_tree = gen.addFunction("print", Visibility::Public);
+    print_derivation_tree.setRetType("void");
+    print_derivation_tree.body() << R"_(
+for (auto x : tree) {
+    for (auto nodes : x.second) {
+    x.first.print();
+    std::cout << " -> ";
+    for (auto it = nodes.begin(); it != nodes.end(); ++it) {
+        it->print();
+        std::cout << ((it + 1 != nodes.end()) ? ", " : "\n");
+    }
+    }
+}
+    )_";
+
+    mainClass.addField("DerivationTree", "derivation_tree", Visibility::Private);
+
     // synthesise data-structures for relations
     for (auto rel : prog.getRelations()) {
         auto relationType =
@@ -2752,6 +2873,7 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
         run.setRetType("void");
         run.setNextArg("[[maybe_unused]] const std::vector<RamDomain>&", "args");
         run.setNextArg("[[maybe_unused]] std::vector<RamDomain>&", "ret");
+        run.setNextArg("DerivationTree&", "derivation_tree");
 
         bool needLock = false;
         visit(*sub.second, [&](const SubroutineReturn&) { needLock = true; });
@@ -2828,81 +2950,6 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
         constructor.setNextArg("std::string", "pf", std::make_optional("\"profile.log\""));
         constructor.setNextInitializer("profiling_fname", "std::move(pf)");
     }
-
-    // generate struct for derivation tree node
-    GenDatastructure& node =
-            db.getDatastructure("DerivationTreeNode", fs::path("DerivationTreeNode"), std::nullopt);
-    node.addInclude("<map>");
-    std::ostream& decl = node.decl();
-    std::ostream& def = node.def();
-    // node struct definition
-    decl << "struct DerivationTreeNode {\n";
-    decl << "std::string relation_name;\n";
-    decl << "std::vector<souffle::RamDomain> attributes;\n";
-
-    decl << "bool operator<(const DerivationTreeNode &rhs) const;\n";
-    def << "bool DerivationTreeNode::operator<(const DerivationTreeNode &rhs) const {\n";
-    def << "if (relation_name != rhs.relation_name) {\n";
-    def << "return relation_name < rhs.relation_name;\n";
-    def << "}\n";
-    def << "for (auto itl = attributes.begin(), itr = rhs.attributes.begin();\n";
-    def << "itl != attributes.end() && itr != rhs.attributes.end(); ++itl, ++itr) {\n";
-    def << "if ((*itl) != (*itr)) {\n";
-    def << "return (*itl) < (*itr);\n";
-    def << "}\n";
-    def << "}\n";
-    def << "return attributes.size() < rhs.attributes.size();\n";
-    def << "}\n";
-
-    decl << "template <typename T, size_t N> DerivationTreeNode(const std::string &relation, const "
-            "std::array<T, N> &attrs);\n";
-    def << "template <typename T, size_t N> DerivationTreeNode::DerivationTreeNode(const std::string "
-           "&relation,\n";
-    def << "const std::array<T, N> &attrs) : relation_name(relation) {\n";
-    def << "std::vector<souffle::RamDomain> v{};\n";
-    def << "for (const auto &attr : attrs) {\n";
-    def << "v.push_back(souffle::ramBitCast(attr));\n";
-    def << "}\n";
-    def << "this->attributes = v;\n";
-    def << "}\n";
-
-    decl << "void print() const;\n";
-    def << "void DerivationTreeNode::print() const {\n";
-    def << "std::cout << relation_name << \"(\";\n";
-    def << "for (auto it = attributes.begin(); it != attributes.end(); ++it) {\n";
-    def << "std::cout << *it << ((it + 1 != attributes.end()) ? \", \" : \")\");\n";
-    def << "}\n";
-    def << "}\n";
-
-    // end of node struct
-    decl << "};\n";
-
-    // generate class for derivation tree
-    GenClass& gen = db.getClass("DerivationTree", fs::path(convertStratumIdent("DerivationTree")));
-    mainClass.addDependency(gen);
-    gen.addField("std::map<DerivationTreeNode, std::vector<std::vector<DerivationTreeNode>>>", "tree", Visibility::Private);
-    // generate node structure
-    GenFunction& add = gen.addFunction("add", Visibility::Public);
-    add.setRetType("void");
-    add.setNextArg("const DerivationTreeNode&", "parent");
-    add.setNextArg("const std::vector<DerivationTreeNode>&", "children");
-    add.body() << "tree[parent].push_back(children);\n";
-    GenFunction& print_derivation_tree = gen.addFunction("print", Visibility::Public);
-    print_derivation_tree.setRetType("void");
-    print_derivation_tree.body() << R"_(
-for (auto x : tree) {
-    for (auto nodes : x.second) {
-    x.first.print();
-    std::cout << " -> ";
-    for (auto it = nodes.begin(); it != nodes.end(); ++it) {
-        it->print();
-        std::cout << ((it + 1 != nodes.end()) ? ", " : "\n");
-    }
-    }
-}
-    )_";
-
-    mainClass.addField("DerivationTree", "derivation_tree", Visibility::Private);
 
     // issue symbol table with string constants
     visit(prog, [&](const StringConstant& sc) { convertSymbol2Idx(sc.getConstant()); });
@@ -3243,7 +3290,8 @@ for (auto x : tree) {
 
         for (auto& sub : prog.getSubroutines()) {
             executeSubroutine.body() << "if (name == \"" << sub.first << "\") {\n"
-                                     << convertStratumIdent("stratum_" + sub.first) << ".run(args, ret);\n"
+                                     << convertStratumIdent("stratum_" + sub.first)
+                                     << ".run(args, ret, derivation_tree);\n"
                                      << "return;"
                                      << "}\n";
         }
