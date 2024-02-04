@@ -660,8 +660,6 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             out << dbg.getMessage();
             out << ")_\");\n";
 
-            out << "std::vector<DerivationTreeNode> node{};\n";
-
             // insert statements of the rule
             dispatch(dbg.getStatement(), out);
             PRINT_END_COMMENT(out);
@@ -2883,6 +2881,9 @@ for (auto x : tree) {
         SubroutineUsingStdRegex = false;
         SubroutineUsingSubstr = false;
         // emit code for subroutine
+
+        run.body() << "std::vector<DerivationTreeNode> node{};\n";
+
         currentClass = &gen;
         emitCode(run.body(), *sub.second);
         // issue end of subroutine
