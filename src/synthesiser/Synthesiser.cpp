@@ -729,18 +729,27 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
 
             assert(rel->getArity() > 0 && "AstToRamTranslator failed/no scans for nullaries");
 
-            out << "for(const auto& env" << id << " : "
-                << "*" << relName << ") {\n";
+            if (!isPrefix("rel_new_", relName)) {
+                out << "for(const auto& env" << id << " : "
+                    << "*" << relName << ") {\n";
 
-            out << "node.push_back(DerivationTreeNode(\""
-                << stripPrefix("@new_", stripPrefix("@delta_", stripPrefix("@info_", rel->getName())))
-                << "\", env" << id << "));\n";
+                out << "node.push_back(DerivationTreeNode(\""
+                    << stripPrefix("@new_", stripPrefix("@delta_", stripPrefix("@info_", rel->getName())))
+                    << "\", env" << id << "));\n";
 
-            visit_(type_identity<TupleOperation>(), scan, out);
+                visit_(type_identity<TupleOperation>(), scan, out);
 
-            out << "node.pop_back();\n";
+                out << "node.pop_back();\n";
 
-            out << "}\n";
+                out << "}\n";
+            } else {
+                out << "for(const auto& env" << id << " : "
+                    << "*" << relName << ") {\n";
+
+                visit_(type_identity<TupleOperation>(), scan, out);
+
+                out << "}\n";
+            }
 
             PRINT_END_COMMENT(out);
         }
@@ -2143,7 +2152,7 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
 
             PRINT_BEGIN_COMMENT(out);
 
-// clang-format off
+            // clang-format off
 #define UNARY_OP(opcode, ty, op)                \
     case FunctorOp::opcode: {                   \
         out << "(" #op "(ramBitCast<" #ty ">("; \
@@ -2703,6 +2712,7 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
     // generate struct for derivation tree node
     GenDatastructure& node =
             db.getDatastructure("DerivationTreeNode", fs::path("DerivationTreeNode"), std::nullopt);
+    node.addInclude("\"souffle/utility/json11.h\"");
     node.addInclude("<map>");
     std::ostream& decl = node.decl();
     std::ostream& def = node.def();
@@ -2737,13 +2747,15 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
     def << "this->attributes = v;\n";
     def << "}\n";
 
-    decl << "void print() const;\n";
-    def << "void DerivationTreeNode::print() const {\n";
-    def << "std::cout << relation_name << \"(\";\n";
-    def << "for (auto it = attributes.begin(); it != attributes.end(); ++it) {\n";
-    def << "std::cout << *it << ((it + 1 != attributes.end()) ? \", \" : \")\");\n";
-    def << "}\n";
-    def << "}\n";
+    decl << "json11::Json to_json() const;\n";
+    def << R"_(
+        json11::Json DerivationTreeNode::to_json() const {
+            return json11::Json::object{
+                {"relation_name", relation_name},
+                {"attributes",
+                json11::Json::array(attributes.begin(), attributes.end())}};
+        }
+    )_";
 
     // end of node struct
     decl << "};\n";
@@ -2753,25 +2765,32 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
     mainClass.addDependency(gen);
     gen.addField("std::map<DerivationTreeNode, std::vector<std::vector<DerivationTreeNode>>>", "tree",
             Visibility::Private);
+    gen.addInclude("\"souffle/utility/json11.h\"");
     // generate node structure
     GenFunction& add = gen.addFunction("add", Visibility::Public);
     add.setRetType("void");
     add.setNextArg("const DerivationTreeNode&", "parent");
     add.setNextArg("const std::vector<DerivationTreeNode>&", "children");
     add.body() << "tree[parent].push_back(children);\n";
-    GenFunction& print_derivation_tree = gen.addFunction("print", Visibility::Public);
-    print_derivation_tree.setRetType("void");
-    print_derivation_tree.body() << R"_(
-for (auto x : tree) {
-    for (auto nodes : x.second) {
-    x.first.print();
-    std::cout << " -> ";
-    for (auto it = nodes.begin(); it != nodes.end(); ++it) {
-        it->print();
-        std::cout << ((it + 1 != nodes.end()) ? ", " : "\n");
+
+    GenFunction& derivation_tree_to_json = gen.addFunction("to_json", Visibility::Public);
+    derivation_tree_to_json.setRetType("json11::Json");
+    derivation_tree_to_json.setConst();
+    derivation_tree_to_json.body() << R"_(
+    json11::Json::array j;
+    for (const auto& derivation : tree) {
+      json11::Json::array children;
+      for (const auto& nodes : derivation.second) {
+        json11::Json::array child =
+            json11::Json::array(nodes.begin(), nodes.end());
+        children.push_back(child);
+      }
+      json11::Json parent;
+      json11::Json::object edge = json11::Json::object{
+          {"parent", derivation.first.to_json()}, {"children", children}};
+      j.push_back(edge);
     }
-    }
-}
+    return j;
     )_";
 
     mainClass.addField("DerivationTree", "derivation_tree", Visibility::Private);
@@ -3156,7 +3175,15 @@ for (auto x : tree) {
         runAll.body() << "std::thread profiler([]() { profile::Tui().runProf(); });\n";
     }
     runAll.body() << "runFunction(inputDirectoryArg, outputDirectoryArg, performIOArg, pruneImdtRelsArg);\n";
-    runAll.body() << "derivation_tree.print();\n";
+    runAll.body() << R"_(
+        std::ofstream dumped_json("derivation.json");
+        if (!dumped_json) {
+            std::cout << json11::Json(derivation_tree).dump() << std::endl;
+        } else {
+            dumped_json << json11::Json(derivation_tree).dump();
+            dumped_json.close();
+        }
+    )_";
     if (glb.config().has("live-profile")) {
         runAll.body() << "if (profiler.joinable()) { profiler.join(); }\n";
     }

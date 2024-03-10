@@ -64,7 +64,11 @@ void GenFunction::declaration(const GenDb*, std::ostream& o) const {
         if (defaultValue) {
             out << " = " << *defaultValue;
         }
-    }) << ");";
+    }) << ")";
+    if (is_const) {
+        o << " const";
+    }
+    o << ";";
 }
 
 void GenFunction::definition(const GenDb*, std::ostream& o) const {
@@ -79,6 +83,9 @@ void GenFunction::definition(const GenDb*, std::ostream& o) const {
         o << ":\n";
         o << join(initializer, ",\n",
                 [&](auto& out, const auto arg) { out << arg.first << "(" << arg.second << ")"; });
+    }
+    if (is_const) {
+        o << " const ";
     }
     o << "{\n";
     o << bodyStream.str();

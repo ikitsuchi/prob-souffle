@@ -104,6 +104,7 @@ public:
     Json(std::nullptr_t) noexcept;   // NUL
     Json(double value);              // NUMBER
     Json(long long value);           // NUMBER
+    Json(int value);                 // NUMBER
     Json(bool value);                // BOOL
     Json(const std::string& value);  // STRING
     Json(std::string&& value);       // STRING
@@ -526,6 +527,7 @@ inline Json::Json() noexcept : m_ptr(statics().null) {}
 inline Json::Json(std::nullptr_t) noexcept : m_ptr(statics().null) {}
 inline Json::Json(double value) : m_ptr(std::make_shared<JsonDouble>(value)) {}
 inline Json::Json(long long value) : m_ptr(std::make_shared<JsonInt>(value)) {}
+inline Json::Json(int value) : m_ptr(std::make_shared<JsonInt>(value)) {}
 inline Json::Json(bool value) : m_ptr(value ? statics().t : statics().f) {}
 inline Json::Json(const std::string& value) : m_ptr(std::make_shared<JsonString>(value)) {}
 inline Json::Json(std::string&& value) : m_ptr(std::make_shared<JsonString>(std::move(value))) {}

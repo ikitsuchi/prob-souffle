@@ -158,7 +158,7 @@ enum Visibility { Public = 0, Private };
 class GenFunction : public Gen {
 public:
     GenFunction(std::string name, GenClass* cl, Visibility v)
-            : Gen(name), cl(cl), visibility(v), override(false) {}
+            : Gen(name), cl(cl), visibility(v) {}
 
     virtual ~GenFunction() = default;
 
@@ -172,6 +172,9 @@ public:
     void setOverride() {
         override = true;
     };
+    void setConst() {
+        is_const = true;
+    }
 
     void declaration(const GenDb* db, std::ostream& o) const override;
 
@@ -189,7 +192,8 @@ private:
     GenClass* cl;
     Visibility visibility;
     bool isConstructor = false;
-    bool override;
+    bool override = false;
+    bool is_const = false;
     std::string retType;
     std::vector<std::tuple<std::string, std::string, std::optional<std::string>>> args;
     std::vector<std::pair<std::string, std::string>> initializer;
