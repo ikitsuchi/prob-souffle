@@ -33,6 +33,7 @@
 #include "ram/Conjunction.h"
 #include "ram/Constraint.h"
 #include "ram/DebugInfo.h"
+#include "ram/Derivation.h"
 #include "ram/EmptinessCheck.h"
 #include "ram/Erase.h"
 #include "ram/ExistenceCheck.h"
@@ -100,6 +101,7 @@
 #include "souffle/utility/MiscUtil.h"
 #include "souffle/utility/StreamUtil.h"
 #include "souffle/utility/StringUtil.h"
+#include "souffle/utility/Types.h"
 #include "souffle/utility/json11.h"
 #include "souffle/utility/tinyformat.h"
 #include "synthesiser/GenDb.h"
@@ -1749,6 +1751,34 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             PRINT_END_COMMENT(out);
         }
 
+        void visit_(type_identity<Derivation>, const Derivation& derivation, std::ostream& out) override {
+            PRINT_BEGIN_COMMENT(out);
+
+            const auto *rel = synthesiser.lookup(derivation.getHeadRelationName());
+            auto arity = rel->getArity();
+            auto relName = synthesiser.getRelationName(rel);
+            auto ctxName = "READ_OP_CONTEXT(" + synthesiser.getOpContextName(*rel) + ")";
+
+            // create inserted tuple
+            out << "Tuple<RamDomain," << arity << "> tuple{{" << join(derivation.getValues(), ",", rec)
+                << "}};\n";
+
+            visit_(type_identity<NestedOperation>(), derivation, out);
+
+            // add derivation tree edge
+            if (derivation.getAddEdge()) {
+                if (isPrefix("@new_", rel->getName())) {
+                    out << "derivation_tree.add(DerivationTreeNode(\"" << stripPrefix("@new_", rel->getName())
+                        << "\", tuple), node);\n";
+                } else if (!isPrefix("@delta_", rel->getName()) && !isPrefix("@info_", rel->getName())) {
+                    out << "derivation_tree.add(DerivationTreeNode(\"" << rel->getName()
+                        << "\", tuple), node);\n";
+                }
+            }
+
+            PRINT_END_COMMENT(out);
+        }
+
         void visit_(type_identity<Filter>, const Filter& filter, std::ostream& out) override {
             PRINT_BEGIN_COMMENT(out);
             out << "if( ";
@@ -1777,18 +1807,21 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             auto ctxName = "READ_OP_CONTEXT(" + synthesiser.getOpContextName(*rel) + ")";
 
             auto condition = guardedInsert.getCondition();
-            // guarded conditions
-            out << "if( ";
-            dispatch(*condition, out);
-            out << ") {\n";
 
             // create inserted tuple
             out << "Tuple<RamDomain," << arity << "> tuple{{" << join(guardedInsert.getValues(), ",", rec)
                 << "}};\n";
 
+            // guarded conditions
+            out << "if( ";
+            dispatch(*condition, out);
+            out << ") {\n";
+
             // insert tuple
             out << relName << "->"
                 << "insert(tuple," << ctxName << ");\n";
+            
+            out << "}\n";
 
             if (isPrefix("@new_", rel->getName())) {
                 // add derivation tree edge
@@ -1813,21 +1846,21 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             auto ctxName = "READ_OP_CONTEXT(" + synthesiser.getOpContextName(*rel) + ")";
 
             // create inserted tuple
-            out << "Tuple<RamDomain," << arity << "> tuple{{" << join(insert.getValues(), ",", rec)
-                << "}};\n";
+            // out << "Tuple<RamDomain," << arity << "> tuple{{" << join(insert.getValues(), ",", rec)
+            //     << "}};\n";
 
             // insert tuple
             out << relName << "->"
                 << "insert(tuple," << ctxName << ");\n";
 
             // add derivation tree edge
-            if (isPrefix("@new_", rel->getName())) {
-                out << "derivation_tree.add(DerivationTreeNode(\"" << stripPrefix("@new_", rel->getName())
-                    << "\", tuple), node);\n";
-            } else if (!isPrefix("@delta_", rel->getName()) && !isPrefix("@info_", rel->getName())) {
-                out << "derivation_tree.add(DerivationTreeNode(\"" << rel->getName()
-                    << "\", tuple), node);\n";
-            }
+            // if (isPrefix("@new_", rel->getName())) {
+            //     out << "derivation_tree.add(DerivationTreeNode(\"" << stripPrefix("@new_", rel->getName())
+            //         << "\", tuple), node);\n";
+            // } else if (!isPrefix("@delta_", rel->getName()) && !isPrefix("@info_", rel->getName())) {
+            //     out << "derivation_tree.add(DerivationTreeNode(\"" << rel->getName()
+            //         << "\", tuple), node);\n";
+            // }
 
             PRINT_END_COMMENT(out);
         }
@@ -2735,6 +2768,11 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
     def << "return attributes.size() < rhs.attributes.size();\n";
     def << "}\n";
 
+    decl << "bool operator==(const DerivationTreeNode &rhs) const;\n";
+    def << "bool DerivationTreeNode::operator==(const DerivationTreeNode &rhs) const {\n";
+    def << "return relation_name == rhs.relation_name && attributes == rhs.attributes;\n";
+    def << "}\n";
+
     decl << "template <typename T, size_t N> DerivationTreeNode(const std::string &relation, const "
             "std::array<T, N> &attrs);\n";
     def << "template <typename T, size_t N> DerivationTreeNode::DerivationTreeNode(const std::string "
@@ -2763,7 +2801,7 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
     // generate class for derivation tree
     GenClass& gen = db.getClass("DerivationTree", fs::path(convertStratumIdent("DerivationTree")));
     mainClass.addDependency(gen);
-    gen.addField("std::map<DerivationTreeNode, std::vector<std::vector<DerivationTreeNode>>>", "tree",
+    gen.addField("std::map<DerivationTreeNode, std::set<std::vector<DerivationTreeNode>>>", "tree",
             Visibility::Private);
     gen.addInclude("\"souffle/utility/json11.h\"");
     // generate node structure
@@ -2771,7 +2809,9 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
     add.setRetType("void");
     add.setNextArg("const DerivationTreeNode&", "parent");
     add.setNextArg("const std::vector<DerivationTreeNode>&", "children");
-    add.body() << "tree[parent].push_back(children);\n";
+    // add.body() << "if (children.size() && (!tree.count(parent) || std::find(tree[parent].begin(), tree[parent].end(), children) == tree[parent].end()))\n";
+    add.body() << "if (children.size())\n";
+    add.body() << "tree[parent].insert(children);\n";
 
     GenFunction& derivation_tree_to_json = gen.addFunction("to_json", Visibility::Public);
     derivation_tree_to_json.setRetType("json11::Json");

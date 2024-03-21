@@ -14,6 +14,7 @@
 
 #include "ram/transform/HoistConditions.h"
 #include "ram/Condition.h"
+#include "ram/Derivation.h"
 #include "ram/Node.h"
 #include "ram/Operation.h"
 #include "ram/Program.h"
@@ -25,6 +26,7 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <_types/_uint8_t.h>
 
 namespace souffle::ram::transform {
 
@@ -72,12 +74,20 @@ bool HoistConditionsTransformer::hoistConditions(Program& program) {
     // hoist conditions for each TupleOperation operation
     visit(program, [&](TupleOperation& search) {
         Own<Condition> newCondition;
+        int derivation_guard = 0;
         search.apply(nodeMapper<Node>([&](auto&& go, Own<Node> node) -> Own<Node> {
-            if (auto* filter = as<Filter>(node)) {
+            if (auto* derivation = as<Derivation>(node)) {
+                ++derivation_guard;
+                // std::cout << "derivation: " << derivation_guard << ": " << *derivation << std::endl;
+                node->apply(go);
+                --derivation_guard;
+                return node;
+            } else if (auto* filter = as<Filter>(node)) {
                 const Condition& condition = filter->getCondition();
                 // if filter condition matches level of TupleOperation,
                 // delete the filter operation and collect condition
-                if (rla->getLevel(&condition) == search.getTupleId()) {
+                if (rla->getLevel(&condition) == search.getTupleId() && derivation_guard == 0) {
+                    // std::cout << derivation_guard << ": " << condition << std::endl;
                     changed = true;
                     newCondition = addCondition(std::move(newCondition), clone(condition));
                     node->apply(go);

@@ -32,6 +32,7 @@
 #include "ram/Conjunction.h"
 #include "ram/Constraint.h"
 #include "ram/DebugInfo.h"
+#include "ram/Derivation.h"
 #include "ram/EmptinessCheck.h"
 #include "ram/Erase.h"
 #include "ram/EstimateJoinSize.h"
@@ -166,6 +167,7 @@ struct Visitor : souffle::detail::VisitorBase<R, NodeType, Params...> {
         SOUFFLE_VISITOR_FORWARD(Aggregate);
         SOUFFLE_VISITOR_FORWARD(ParallelIndexAggregate);
         SOUFFLE_VISITOR_FORWARD(IndexAggregate);
+        SOUFFLE_VISITOR_FORWARD(Derivation);
 
         // Statements
         SOUFFLE_VISITOR_FORWARD(Assign);
@@ -244,6 +246,7 @@ protected:
     SOUFFLE_VISITOR_LINK(TupleOperation, NestedOperation);
     SOUFFLE_VISITOR_LINK(Filter, AbstractConditional);
     SOUFFLE_VISITOR_LINK(Break, AbstractConditional);
+    SOUFFLE_VISITOR_LINK(Derivation, NestedOperation);
     SOUFFLE_VISITOR_LINK(AbstractConditional, NestedOperation);
     SOUFFLE_VISITOR_LINK(NestedOperation, Operation);
 

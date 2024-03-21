@@ -42,6 +42,7 @@
 #include "ram/Break.h"
 #include "ram/Constraint.h"
 #include "ram/DebugInfo.h"
+#include "ram/Derivation.h"
 #include "ram/EmptinessCheck.h"
 #include "ram/EstimateJoinSize.h"
 #include "ram/ExistenceCheck.h"
@@ -53,6 +54,7 @@
 #include "ram/LogRelationTimer.h"
 #include "ram/Negation.h"
 #include "ram/NestedIntrinsicOperator.h"
+#include "ram/Operation.h"
 #include "ram/Query.h"
 #include "ram/Scan.h"
 #include "ram/Sequence.h"
@@ -151,8 +153,11 @@ Own<ram::Statement> ClauseTranslator::createRamFactQuery(const ast::Clause& clau
     assert(isFact(clause) && "clause should be fact");
     assert(!isRecursive() && "recursive clauses cannot have facts");
 
+    auto op = createInsertion(clause);
+    op = addDerivationMaintain(clause, std::move(op));
+
     // Create a fact statement
-    return mk<ram::Query>(createInsertion(clause));
+    return mk<ram::Query>(std::move(op));
 }
 
 Own<ram::Statement> ClauseTranslator::createRamRuleQuery(const ast::Clause& clause) {
@@ -164,6 +169,7 @@ Own<ram::Statement> ClauseTranslator::createRamRuleQuery(const ast::Clause& clau
     // Set up the RAM statement bottom-up
     auto op = createInsertion(clause);
     op = addBodyLiteralConstraints(clause, std::move(op));
+    op = addDerivationMaintain(clause, std::move(op));
     op = addVariableBindingConstraints(std::move(op));
     op = addGeneratorLevels(std::move(op), clause);
     op = addVariableIntroductions(clause, std::move(op));
@@ -174,6 +180,18 @@ Own<ram::Statement> ClauseTranslator::createRamRuleQuery(const ast::Clause& clau
 Own<ram::Operation> ClauseTranslator::addEntryPoint(const ast::Clause& clause, Own<ram::Operation> op) const {
     auto cond = createCondition(clause);
     return cond != nullptr ? mk<ram::Filter>(std::move(cond), std::move(op)) : std::move(op);
+}
+
+Own<ram::Operation> ClauseTranslator::addDerivationMaintain(const ast::Clause& clause, Own<ram::Operation> op) const {
+    const auto head = clause.getHead();
+    auto headRelationName = getClauseAtomName(clause, head);
+
+    VecOwn<ram::Expression> values;
+    for (const auto* arg : head->getArguments()) {
+        values.push_back(context.translateValue(*valueIndex, arg));
+    }
+
+    return mk<ram::Derivation>(headRelationName, std::move(values), std::move(op));
 }
 
 Own<ram::Operation> ClauseTranslator::addVariableBindingConstraints(Own<ram::Operation> op) const {

@@ -102,6 +102,7 @@ protected:
     Own<ram::Operation> addGeneratorLevels(Own<ram::Operation> op, const ast::Clause& clause) const;
     Own<ram::Operation> addVariableIntroductions(const ast::Clause& clause, Own<ram::Operation> op);
     Own<ram::Operation> addEntryPoint(const ast::Clause& clause, Own<ram::Operation> op) const;
+    Own<ram::Operation> addDerivationMaintain(const ast::Clause& clause, Own<ram::Operation> op) const;
 
     /** Levelling methods */
     virtual Own<ram::Operation> addAtomScan(Own<ram::Operation> op, const ast::Atom* atom,

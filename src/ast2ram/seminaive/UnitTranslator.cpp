@@ -35,6 +35,7 @@
 #include "ram/Conjunction.h"
 #include "ram/Constraint.h"
 #include "ram/DebugInfo.h"
+#include "ram/Derivation.h"
 #include "ram/EmptinessCheck.h"
 #include "ram/Erase.h"
 #include "ram/ExistenceCheck.h"
@@ -233,24 +234,27 @@ Own<ram::Statement> UnitTranslator::generateMergeRelationsWithFilter(const ast::
         const std::string& filterRelation) const {
     VecOwn<ram::Expression> values;
     VecOwn<ram::Expression> values2;
+    VecOwn<ram::Expression> values3;
 
     // Proposition - insert if not empty
     if (rel->getArity() == 0) {
         auto insertion = mk<ram::Insert>(destRelation, std::move(values));
-        return mk<ram::Query>(mk<ram::Filter>(
-                mk<ram::Negation>(mk<ram::EmptinessCheck>(srcRelation)), std::move(insertion)));
+        return mk<ram::Query>(mk<ram::Filter>(mk<ram::Negation>(mk<ram::EmptinessCheck>(srcRelation)),
+                mk<ram::Derivation>(destRelation, std::move(values2), std::move(insertion), false)));
     }
 
     // Predicate - insert all values
     for (std::size_t i = 0; i < rel->getArity(); i++) {
         values.push_back(mk<ram::TupleElement>(0, i));
         values2.push_back(mk<ram::TupleElement>(0, i));
+        values3.push_back(mk<ram::TupleElement>(0, i));
     }
     auto insertion = mk<ram::Insert>(destRelation, std::move(values));
     auto filtered =
-            mk<ram::Filter>(mk<ram::Negation>(mk<ram::ExistenceCheck>(filterRelation, std::move(values2))),
+            mk<ram::Filter>(mk<ram::Negation>(mk<ram::ExistenceCheck>(filterRelation, std::move(values3))),
                     std::move(insertion));
-    auto stmt = mk<ram::Query>(mk<ram::Scan>(srcRelation, 0, std::move(filtered)));
+    auto stmt = mk<ram::Query>(mk<ram::Scan>(
+            srcRelation, 0, mk<ram::Derivation>(destRelation, std::move(values2), std::move(filtered), false)));
 
     if (rel->getRepresentation() == RelationRepresentation::EQREL) {
         return mk<ram::Sequence>(mk<ram::MergeExtend>(destRelation, srcRelation), std::move(stmt));
@@ -261,12 +265,14 @@ Own<ram::Statement> UnitTranslator::generateMergeRelationsWithFilter(const ast::
 Own<ram::Statement> UnitTranslator::generateMergeRelations(
         const ast::Relation* rel, const std::string& destRelation, const std::string& srcRelation) const {
     VecOwn<ram::Expression> values;
+    VecOwn<ram::Expression> values2;
 
     // Proposition - insert if not empty
     if (rel->getArity() == 0) {
         auto insertion = mk<ram::Insert>(destRelation, std::move(values));
-        return mk<ram::Query>(mk<ram::Filter>(
-                mk<ram::Negation>(mk<ram::EmptinessCheck>(srcRelation)), std::move(insertion)));
+        return mk<ram::Query>(mk<ram::Derivation>(destRelation, std::move(values2),
+                mk<ram::Filter>(
+                        mk<ram::Negation>(mk<ram::EmptinessCheck>(srcRelation)), std::move(insertion)), false));
     }
 
     // Predicate - insert all values
@@ -275,9 +281,11 @@ Own<ram::Statement> UnitTranslator::generateMergeRelations(
     }
     for (std::size_t i = 0; i < rel->getArity(); i++) {
         values.push_back(mk<ram::TupleElement>(0, i));
+        values2.push_back(mk<ram::TupleElement>(0, i));
     }
     auto insertion = mk<ram::Insert>(destRelation, std::move(values));
-    auto stmt = mk<ram::Query>(mk<ram::Scan>(srcRelation, 0, std::move(insertion)));
+    auto stmt = mk<ram::Query>(mk<ram::Scan>(
+            srcRelation, 0, mk<ram::Derivation>(destRelation, std::move(values2), std::move(insertion), false)));
     return stmt;
 }
 
@@ -285,22 +293,27 @@ Own<ram::Statement> UnitTranslator::generateDebugRelation(const ast::Relation* r
         const std::string& destRelation, const std::string& srcRelation,
         Own<ram::Expression> iteration) const {
     VecOwn<ram::Expression> values;
+    VecOwn<ram::Expression> values2;
 
     for (std::size_t i = 0; i < rel->getArity(); i++) {
         values.push_back(mk<ram::TupleElement>(0, i));
+        values2.push_back(mk<ram::TupleElement>(0, i));
     }
 
-    values.push_back(std::move(iteration));
+    values.push_back(clone(iteration));
+    values2.push_back(std::move(iteration));
 
     // Proposition - insert if not empty
     if (rel->getArity() == 0) {
         auto insertion = mk<ram::Insert>(destRelation, std::move(values));
-        return mk<ram::Query>(mk<ram::Filter>(
-                mk<ram::Negation>(mk<ram::EmptinessCheck>(srcRelation)), std::move(insertion)));
+        return mk<ram::Query>(mk<ram::Derivation>(destRelation, std::move(values2),
+                mk<ram::Filter>(
+                        mk<ram::Negation>(mk<ram::EmptinessCheck>(srcRelation)), std::move(insertion)), false));
     }
 
     auto insertion = mk<ram::Insert>(destRelation, std::move(values));
-    auto stmt = mk<ram::Query>(mk<ram::Scan>(srcRelation, 0, std::move(insertion)));
+    auto stmt = mk<ram::Query>(mk<ram::Scan>(
+            srcRelation, 0, mk<ram::Derivation>(destRelation, std::move(values2), std::move(insertion), false)));
     return stmt;
 }
 
@@ -612,7 +625,8 @@ Own<ram::Statement> UnitTranslator::generateStratumLubSequence(
             values.push_back(mk<ram::TupleElement>(0, i));
         }
     }
-    Own<ram::Operation> op = mk<ram::Insert>(lubName, std::move(values));
+    Own<ram::Operation> op = mk<ram::Insert>(lubName, clone(values));
+    op = mk<ram::Derivation>(lubName, std::move(values), std::move(op), false);
 
     for (std::size_t i = arity; i >= firstAuxiliary + 1; i--) {
         const auto type = attributes[i - 1]->getTypeName();
@@ -661,8 +675,9 @@ Own<ram::Statement> UnitTranslator::generateStratumLubSequence(
                 values.push_back(std::move(lub));
             }
         }
-        op = mk<ram::Insert>(deltaName, std::move(values));
+        op = mk<ram::Insert>(deltaName, clone(values));
         op = mk<ram::Filter>(mk<ram::Negation>(std::move(condition)), std::move(op));
+        op = mk<ram::Derivation>(deltaName, std::move(values), std::move(op), false);
 
         for (std::size_t i = 0; i < arity - auxiliaryArity; i++) {
             auto cst = mk<ram::Constraint>(
@@ -684,7 +699,7 @@ Own<ram::Statement> UnitTranslator::generateStratumLubSequence(
         for (std::size_t i = 0; i < arity; i++) {
             values.push_back(mk<ram::TupleElement>(0, i));
         }
-        op = mk<ram::Insert>(deltaName, std::move(values));
+        op = mk<ram::Insert>(deltaName, clone(values));
         for (std::size_t i = 0; i < arity; i++) {
             if (i < firstAuxiliary) {
                 values.push_back(mk<ram::TupleElement>(0, i));
@@ -694,6 +709,7 @@ Own<ram::Statement> UnitTranslator::generateStratumLubSequence(
         }
         op = mk<ram::Filter>(
                 mk<ram::Negation>(mk<ram::ExistenceCheck>(name, std::move(values))), std::move(op));
+        op = mk<ram::Derivation>(deltaName, std::move(values), std::move(op), false);
         op = mk<ram::Scan>(lubName, 0, std::move(op));
         appendStmt(stmts, mk<ram::Query>(std::move(op)));
     } else {
@@ -702,7 +718,8 @@ Own<ram::Statement> UnitTranslator::generateStratumLubSequence(
         for (std::size_t i = 0; i < arity; i++) {
             values.push_back(mk<ram::TupleElement>(0, i));
         }
-        op = mk<ram::Insert>(name, std::move(values));
+        op = mk<ram::Insert>(name, clone(values));
+        op = mk<ram::Derivation>(name, std::move(values), std::move(op), false);
         op = mk<ram::Scan>(lubName, 0, std::move(op));
         appendStmt(stmts, mk<ram::Query>(std::move(op)));
     }

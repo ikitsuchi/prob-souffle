@@ -128,6 +128,8 @@ public:
                     NK_Filter,
                 NK_LastAbstractConditional,
 
+                NK_Derivation,
+
                 NK_TupleOperation,
                     NK_RelationOperation,
                         NK_Aggregate,
