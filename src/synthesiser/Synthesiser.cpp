@@ -2833,6 +2833,10 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
     return j;
     )_";
 
+    GenFunction& derivation_tree_get_tree = gen.addFunction("getTree", Visibility::Public);
+    derivation_tree_get_tree.setRetType("std::map<DerivationTreeNode, std::set<std::vector<DerivationTreeNode>>> &");
+    derivation_tree_get_tree.body() << "return tree;\n";
+
     mainClass.addField("DerivationTree", "derivation_tree", Visibility::Private);
 
     // synthesise data-structures for relations
@@ -3215,6 +3219,7 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
         runAll.body() << "std::thread profiler([]() { profile::Tui().runProf(); });\n";
     }
     runAll.body() << "runFunction(inputDirectoryArg, outputDirectoryArg, performIOArg, pruneImdtRelsArg);\n";
+    runAll.body() << "derivationTreeFilter();\n";
     runAll.body() << R"_(
         std::ofstream dumped_json("derivation.json");
         if (!dumped_json) {
@@ -3346,6 +3351,49 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
     setNumThreads.body() << "symTable.setNumLanes(getNumThreads());\n";
     setNumThreads.body() << "recordTable.setNumLanes(getNumThreads());\n";
     setNumThreads.body() << "regexCache.setNumLanes(getNumThreads());\n";
+
+    GenFunction& derivationTreeFilter = mainClass.addFunction("derivationTreeFilter", Visibility::Public);
+    derivationTreeFilter.setRetType("void");
+    derivationTreeFilter.body() << R"cpp(
+    std::queue<DerivationTreeNode> work_queue;
+    std::set<DerivationTreeNode> filtered_nodes;
+    std::map<DerivationTreeNode, std::set<std::vector<DerivationTreeNode>>>
+        new_tree;
+    auto output_relations = getOutputRelations();
+
+    for (auto &relation : output_relations) {
+      for (auto &kv : derivation_tree.getTree()) {
+        if (kv.first.relation_name == relation->getName()) {
+          work_queue.push(kv.first);
+        }
+      }
+    }
+
+    while (!work_queue.empty()) {
+      auto node = work_queue.front();
+      work_queue.pop();
+      filtered_nodes.insert(node);
+      auto it = derivation_tree.getTree().find(node);
+      if (it != derivation_tree.getTree().end()) {
+        for (auto children : it->second) {
+          for (auto child : children) {
+            if (filtered_nodes.find(child) == filtered_nodes.end()) {
+              work_queue.push(child);
+            }
+          }
+        }
+      }
+    }
+
+    for (auto &node : filtered_nodes) {
+      auto it = derivation_tree.getTree().find(node);
+      if (it != derivation_tree.getTree().end()) {
+        new_tree[node] = it->second;
+      }
+    }
+
+    derivation_tree.getTree().swap(new_tree);
+                   )cpp";
 
     if (!prog.getSubroutines().empty()) {
         // generate subroutine adapter
