@@ -551,7 +551,7 @@ Own<ram::transform::Transformer> ramTransformerSequence(Global& glb) {
                     mk<ParallelTransformer>()),
             mk<ReportIndexTransformer>());
     // clang-format on
-
+    // Own<Transformer> ramTransform = mk<TransformerSequence>();
     return ramTransform;
 }
 

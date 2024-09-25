@@ -1766,15 +1766,15 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
             visit_(type_identity<NestedOperation>(), derivation, out);
 
             // add derivation tree edge
-            if (derivation.getAddEdge()) {
-                if (isPrefix("@new_", rel->getName())) {
-                    out << "derivation_tree.add(DerivationTreeNode(\"" << stripPrefix("@new_", rel->getName())
-                        << "\", tuple), node);\n";
-                } else if (!isPrefix("@delta_", rel->getName()) && !isPrefix("@info_", rel->getName())) {
-                    out << "derivation_tree.add(DerivationTreeNode(\"" << rel->getName()
-                        << "\", tuple), node);\n";
-                }
-            }
+            // if (derivation.getAddEdge()) {
+            //     if (isPrefix("@new_", rel->getName())) {
+            //         out << "derivation_tree.add(DerivationTreeNode(\"" << stripPrefix("@new_", rel->getName())
+            //             << "\", tuple), node);\n";
+            //     } else if (!isPrefix("@delta_", rel->getName()) && !isPrefix("@info_", rel->getName())) {
+            //         out << "derivation_tree.add(DerivationTreeNode(\"" << rel->getName()
+            //             << "\", tuple), node);\n";
+            //     }
+            // }
 
             PRINT_END_COMMENT(out);
         }
@@ -1854,13 +1854,13 @@ void Synthesiser::emitCode(std::ostream& out, const Statement& stmt) {
                 << "insert(tuple," << ctxName << ");\n";
 
             // add derivation tree edge
-            // if (isPrefix("@new_", rel->getName())) {
-            //     out << "derivation_tree.add(DerivationTreeNode(\"" << stripPrefix("@new_", rel->getName())
-            //         << "\", tuple), node);\n";
-            // } else if (!isPrefix("@delta_", rel->getName()) && !isPrefix("@info_", rel->getName())) {
-            //     out << "derivation_tree.add(DerivationTreeNode(\"" << rel->getName()
-            //         << "\", tuple), node);\n";
-            // }
+            if (isPrefix("@new_", rel->getName())) {
+                out << "derivation_tree.add(DerivationTreeNode(\"" << stripPrefix("@new_", rel->getName())
+                    << "\", tuple), node);\n";
+            } else if (!isPrefix("@delta_", rel->getName()) && !isPrefix("@info_", rel->getName())) {
+                out << "derivation_tree.add(DerivationTreeNode(\"" << rel->getName()
+                    << "\", tuple), node);\n";
+            }
 
             PRINT_END_COMMENT(out);
         }
@@ -2789,7 +2789,7 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
     def << R"_(
         json11::Json DerivationTreeNode::to_json() const {
             return json11::Json::object{
-                {"relation_name", relation_name},
+                {"name", relation_name},
                 {"attributes",
                 json11::Json::array(attributes.begin(), attributes.end())}};
         }
@@ -2827,7 +2827,7 @@ void Synthesiser::generateCode(GenDb& db, const std::string& id, bool& withShare
       }
       json11::Json parent;
       json11::Json::object edge = json11::Json::object{
-          {"parent", derivation.first.to_json()}, {"children", children}};
+          {"head", derivation.first.to_json()}, {"bodies", children}};
       j.push_back(edge);
     }
     return j;
